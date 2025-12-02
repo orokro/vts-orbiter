@@ -1,3 +1,11 @@
+/*
+	index.js
+	--------
+
+	A Node.js application that connects to VTube Studio via WebSocket,
+	loads a specified image asset, and makes it orbit around the screen.
+*/
+
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
@@ -32,18 +40,27 @@ if (fs.existsSync(TOKEN_FILE)) {
 
 // --- File System Logic (The "Throwing" Part) ---
 
+
+/**
+ * Helper function to find VTube Studio's installation path.
+ * 
+ * @returns {string|null} The path to VTube Studio's Items folder, or null if not found.
+ */
 function findVTubeStudioPath() {
+
 	const platform = os.platform();
 	const homeDir = os.homedir();
 	
 	// Common installation paths to check
 	const commonPaths = [];
 
+	// Add platform-specific common paths
 	if (platform === 'win32') {
 		commonPaths.push(
 			'C:\\Program Files (x86)\\Steam\\steamapps\\common\\VTube Studio\\VTube Studio_Data\\StreamingAssets\\Items',
 			'C:\\Program Files\\Steam\\steamapps\\common\\VTube Studio\\VTube Studio_Data\\StreamingAssets\\Items',
-			'D:\\Steam\\steamapps\\common\\VTube Studio\\VTube Studio_Data\\StreamingAssets\\Items'
+			'D:\\Steam\\steamapps\\common\\VTube Studio\\VTube Studio_Data\\StreamingAssets\\Items',
+			'D:\\SteamLibrary\\steamapps\\common\\VTube Studio\\VTube Studio_Data\\StreamingAssets\\Items',
 		);
 	} else if (platform === 'darwin') {
 		commonPaths.push(
@@ -52,15 +69,22 @@ function findVTubeStudioPath() {
 		);
 	}
 
-	for (const p of commonPaths) {
-		if (fs.existsSync(p)) {
+	// Check each common path & return the first that exists
+	for (const p of commonPaths)
+		if (fs.existsSync(p))
 			return p;
-		}
-	}
+		
+	// return null if none found
 	return null;
 }
 
+
+
+/**
+ * Prepares the asset by checking its existence and copying it to VTube Studio's Items folder.
+ */
 function prepareAsset() {
+
 	console.log(`[Setup] Preparing to load: ${TARGET_FILENAME}`);
 
 	// 1. Check if file exists in our local 'public' folder
@@ -91,9 +115,15 @@ function prepareAsset() {
 	}
 }
 
+
 // --- Main Connection Logic ---
 
+
+/**
+ * Establishes a WebSocket connection to VTube Studio and sets up event handlers.
+ */
 function connect() {
+
 	if (ws) {
 		ws.removeAllListeners();
 		try { ws.terminate(); } catch (e) {}
@@ -124,13 +154,23 @@ function connect() {
 	});
 }
 
+
+/**
+ * Cleans up timers and state on disconnection.
+ */
 function cleanupState() {
-	if (orbitTimer) clearInterval(orbitTimer);
-	if (keepAliveTimer) clearInterval(keepAliveTimer);
+
+	if (orbitTimer) 
+		clearInterval(orbitTimer);
+
+	if (keepAliveTimer) 
+		clearInterval(keepAliveTimer);
+
 	orbitTimer = null;
 	keepAliveTimer = null;
 	itemInstanceId = null;
 }
+
 
 // --- Protocol Helper ---
 
@@ -195,8 +235,13 @@ function authenticate() {
 	sendRequest("AuthenticationRequest", { pluginName: PLUGIN_NAME, pluginDeveloper: PLUGIN_DEVELOPER, authenticationToken: authToken });
 }
 
+/**
+ * Sends a request to load the specified item into VTube Studio.
+ */
 function loadItem() {
+
 	console.log(`[Item] Spawning '${TARGET_FILENAME}' in VTS...`);
+	
 	sendRequest("ItemLoadRequest", {
 		fileName: TARGET_FILENAME,
 		positionX: 0,
@@ -208,8 +253,18 @@ function loadItem() {
 	});
 }
 
+
+/**
+ * Starts the orbiting loop that moves the item in a circular path.
+ * 
+ * @returns {void}
+ */
 function startOrbitLoop() {
-	if (orbitTimer) return;
+
+	// gtfo if already running
+	if (orbitTimer)
+		return;
+
 	console.log("[Orbit] Orbiting...");
 	const radius = 0.4;
 	const speed = 0.05;
@@ -236,8 +291,9 @@ function startOrbitLoop() {
 
 // --- Start ---
 console.log("--- VTube Studio Node Orbiter ---");
+
 // 1. Prepare file
 prepareAsset();
+
 // 2. Connect
 connect();
-
