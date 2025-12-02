@@ -19,6 +19,16 @@ const PLUGIN_DEVELOPER = "NodeJS User";
 const TOKEN_FILE = './auth_token.txt';
 const PUBLIC_FOLDER = path.join(__dirname, 'public');
 
+let modelPosition = {
+	x: 0,
+	y: 0,
+	rotation: 0,
+	size: 1
+};
+
+// ArtMesh ID to pin the cookie to (something that moves with your head)
+const HEAD_ARTMESH_ID = "ArtMesh51";
+
 // --- Runtime Arguments ---
 // Usage: node index.js [filename.png]
 // Defaults to "orbiter.png" if no argument provided
@@ -187,6 +197,7 @@ function sendRequest(messageType, data = {}) {
 // --- Response Handler ---
 
 function handleResponse(res) {
+
 	if (res.messageType === "APIError") {
 		// Ignore "InstanceID not found" errors during cleanup
 		if (res.data.errorID !== 50) console.error(`[API Error] ${res.data.message}`);
@@ -197,23 +208,63 @@ function handleResponse(res) {
 		case "APIStateResponse":
 			res.data.currentSessionAuthenticated ? loadItem() : requestToken();
 			break;
+
 		case "AuthenticationTokenResponse":
 			authToken = res.data.authenticationToken;
 			fs.writeFileSync(TOKEN_FILE, authToken);
 			console.log("[Auth] Token saved.");
 			authenticate();
 			break;
+
 		case "AuthenticationResponse":
+
 			if (res.data.authenticated) {
 				console.log("[Auth] Authenticated.");
+		
+				// Subscribe to model movement updates
+				sendRequest("EventSubscriptionRequest", {
+					eventName: "ModelMovedEvent",
+					subscribe: true,
+					config: {
+						// empty or default config is fine
+					}
+				});
+		
 				loadItem();
 			} else {
 				console.error("[Auth] Failed. Delete auth_token.txt to reset.");
 			}
 			break;
+
+		case "ModelMovedEvent":
+			// return;
+			if (res.data && res.data.modelPosition) {
+				console.log("[Model] Pos:", res.data); // debug if you want
+
+				const {positionX, positionY, rotation, size} = res.data.modelPosition;
+				
+				modelPosition.x = positionX;
+				modelPosition.y = positionY;
+				modelPosition.rotation = rotation;
+				modelPosition.size = size;
+				
+			}
+			break;
+
 		case "ItemLoadResponse":
 			itemInstanceId = res.data.instanceID;
 			console.log(`[Item] Loaded successfully (ID: ${itemInstanceId})`);
+			// NEW: pin to head instead of starting orbit directly
+			// pinItemToHead();
+			startOrbitLoop();
+			break;
+
+		case "ItemPinResponse":
+			if (res.data.isPinned) {
+				console.log("[Pin] Item pinned to model. Starting orbit.");
+			} else {
+				console.warn("[Pin] ItemPinRequest reported not pinned, starting orbit anyway.");
+			}
 			startOrbitLoop();
 			break;
 	}
@@ -231,9 +282,11 @@ function requestToken() {
 	}
 }
 
+
 function authenticate() {
 	sendRequest("AuthenticationRequest", { pluginName: PLUGIN_NAME, pluginDeveloper: PLUGIN_DEVELOPER, authenticationToken: authToken });
 }
+
 
 /**
  * Sends a request to load the specified item into VTube Studio.
@@ -255,10 +308,40 @@ function loadItem() {
 
 
 /**
- * Starts the orbiting loop that moves the item in a circular path.
- * 
- * @returns {void}
+ * Pin the loaded item to the model's head ArtMesh so it follows the model.
  */
+function pinItemToHead() {
+
+	if (!itemInstanceId) {
+		console.warn("[Pin] No itemInstanceId yet, can't pin.");
+		return;
+	}
+
+	if (!HEAD_ARTMESH_ID) {
+		console.warn("[Pin] HEAD_ARTMESH_ID not set, skipping pin.");
+		startOrbitLoop();
+		return;
+	}
+
+	console.log("[Pin] Pinning item to head ArtMesh...");
+
+	sendRequest("ItemPinRequest", {
+		pin: true,
+		itemInstanceID: itemInstanceId,
+		angleRelativeTo: "RelativeToModel",
+		sizeRelativeTo: "RelativeToCurrentItemSize",
+		vertexPinType: "Center",
+		pinInfo: {
+			// leave modelID empty to use current model
+			modelID: "",
+			artMeshID: HEAD_ARTMESH_ID,
+			angle: 0,	// keep current rotation
+			size: 0		// keep current size
+		}
+	});
+}
+
+
 function startOrbitLoop() {
 
 	// gtfo if already running
@@ -266,29 +349,61 @@ function startOrbitLoop() {
 		return;
 
 	console.log("[Orbit] Orbiting...");
-	const radius = 0.4;
-	const speed = 0.05;
-	const centerY = 0.3;
-	
+
+	const baseRadius = 0.18;	// small circle around the head
+	const headOffsetX = 0;		// tweak these to line up with your head
+	const headOffsetY = 0.75;
+
+	const speed = 0.35;
+
 	orbitTimer = setInterval(() => {
 		if (!itemInstanceId) return;
+
 		angle += speed;
-		const newX = Math.cos(angle) * radius;
-		const newY = centerY + (Math.sin(angle) * radius * 0.5);
-		
+
+		// For now, ignore modelPosition.size in the math so we don't yeet it off-screen
+		const centerX = modelPosition.x + headOffsetX;
+		const centerY = modelPosition.y + headOffsetY;
+
+		const radius = baseRadius; // do NOT multiply by modelPosition.size yet
+
+		const newX = centerX + Math.cos(angle) * radius;
+		const newY = centerY + Math.sin(angle) * radius * 0.5;
+
+		// radians -> degrees, keep it sane
+		let angleDeg = (angle * 180 / Math.PI) % 360;
+		if (angleDeg > 180) angleDeg -= 360;
+		const rotation = -angleDeg;
+
+		// quick debug if you want:
+		// console.log("orbit pos:", { newX, newY });
+
 		sendRequest("ItemMoveRequest", {
 			itemsToMove: [{
 				itemInstanceID: itemInstanceId,
+				timeInSeconds:0.1,
+				fadeMode: "linear",
 				positionX: newX,
 				positionY: newY,
-				rotation: (angle * 180 / Math.PI) * -1,
-				fade: 1,
-				order: 10
+				size: -1000,
+				rotation,
+				order: -1000,
+				setFlip: false,
+				flip: false,
+				userCanStop: true
 			}]
 		});
 	}, 33);
 }
 
+
+
+
+/**
+ * Allows the user to exit the application gracefully using 'q' or Ctrl+C.
+ * 
+ * @returns {void}
+ */
 function setupExitControls() {
 	if (!process.stdin.isTTY) return;
 
@@ -305,6 +420,10 @@ function setupExitControls() {
 	});
 }
 
+
+/**
+ * Cleans up resources and exits the application gracefully.
+ */
 function gracefulExit() {
 	console.log("\n[Exit] Cleaning up…");
 
