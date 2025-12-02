@@ -241,12 +241,12 @@ function authenticate() {
 function loadItem() {
 
 	console.log(`[Item] Spawning '${TARGET_FILENAME}' in VTS...`);
-	
+
 	sendRequest("ItemLoadRequest", {
 		fileName: TARGET_FILENAME,
 		positionX: 0,
 		positionY: 0,
-		size: 0.3,
+		size: 0.1,
 		animationPlayState: true,
 		useAutoFit: true,
 		customData: "NodeJS_Orbit_Item"
@@ -278,7 +278,7 @@ function startOrbitLoop() {
 		
 		sendRequest("ItemMoveRequest", {
 			itemsToMove: [{
-				instanceID: itemInstanceId,
+				itemInstanceID: itemInstanceId,
 				positionX: newX,
 				positionY: newY,
 				rotation: (angle * 180 / Math.PI) * -1,
@@ -289,11 +289,55 @@ function startOrbitLoop() {
 	}, 33);
 }
 
+function setupExitControls() {
+	if (!process.stdin.isTTY) return;
+
+	process.stdin.setRawMode(true);
+	process.stdin.resume();
+
+	process.stdin.setEncoding('utf8');
+
+	console.log("[Controls] Press 'q' or Ctrl+C to quit.");
+
+	process.stdin.on('data', (key) => {
+		if (key === '\u0003') return gracefulExit();	// Ctrl+C
+		if (key.toLowerCase() === 'q') return gracefulExit();
+	});
+}
+
+function gracefulExit() {
+	console.log("\n[Exit] Cleaning up…");
+
+	// unload item from VTS
+	sendRequest("ItemUnloadRequest", {
+		unloadAllLoadedByThisPlugin: true
+	});
+
+	// remove the cookie file from VTS Items folder
+
+	if (fs.existsSync(assetPath)) {
+		try { fs.unlinkSync(assetPath); } catch (e) {}
+	}
+
+	if (ws && ws.readyState === WebSocket.OPEN)
+		ws.close();
+
+	process.stdin.setRawMode(false);
+	process.stdin.pause();
+
+	setTimeout(() => process.exit(0), 200);
+}
+
+
+
 // --- Start ---
 console.log("--- VTube Studio Node Orbiter ---");
 
 // 1. Prepare file
 prepareAsset();
 
-// 2. Connect
+// 2. Allow exit controls
+setupExitControls();
+
+// 3. Connect
 connect();
